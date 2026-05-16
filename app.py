@@ -6,17 +6,22 @@ import json
 import h5py
 
 
-def _replace_batch_shape(config):
+def _sanitize_model_config(config):
     if isinstance(config, dict):
         updated = {}
         for key, value in config.items():
             if key == "batch_shape":
                 updated["batch_input_shape"] = value
+            elif key == "dtype" and isinstance(value, dict):
+                if value.get("class_name") == "DTypePolicy":
+                    updated["dtype"] = value.get("config", {}).get("name", "float32")
+                else:
+                    updated[key] = _sanitize_model_config(value)
             else:
-                updated[key] = _replace_batch_shape(value)
+                updated[key] = _sanitize_model_config(value)
         return updated
     if isinstance(config, list):
-        return [_replace_batch_shape(item) for item in config]
+        return [_sanitize_model_config(item) for item in config]
     return config
 
 
@@ -24,7 +29,8 @@ def load_model_compat(model_path):
     try:
         return tf.keras.models.load_model(model_path, compile=False)
     except TypeError as exc:
-        if "batch_shape" not in str(exc):
+        error_text = str(exc)
+        if "batch_shape" not in error_text and "'str' object has no attribute 'name'" not in error_text:
             raise
 
         with h5py.File(model_path, "r") as h5_file:
@@ -33,7 +39,7 @@ def load_model_compat(model_path):
                 raw_config = raw_config.decode("utf-8")
 
         model_config = json.loads(raw_config)
-        model_config = _replace_batch_shape(model_config)
+        model_config = _sanitize_model_config(model_config)
         model = tf.keras.models.model_from_json(json.dumps(model_config))
         model.load_weights(model_path)
         return model
