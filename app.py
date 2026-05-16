@@ -2,8 +2,44 @@ import streamlit as st
 import pandas as pd
 import tensorflow as tf
 import pickle
+import json
+import h5py
 
-model =  tf.keras.models.load_model('model.h5')
+
+def _replace_batch_shape(config):
+    if isinstance(config, dict):
+        updated = {}
+        for key, value in config.items():
+            if key == "batch_shape":
+                updated["batch_input_shape"] = value
+            else:
+                updated[key] = _replace_batch_shape(value)
+        return updated
+    if isinstance(config, list):
+        return [_replace_batch_shape(item) for item in config]
+    return config
+
+
+def load_model_compat(model_path):
+    try:
+        return tf.keras.models.load_model(model_path, compile=False)
+    except TypeError as exc:
+        if "batch_shape" not in str(exc):
+            raise
+
+        with h5py.File(model_path, "r") as h5_file:
+            raw_config = h5_file.attrs["model_config"]
+            if isinstance(raw_config, bytes):
+                raw_config = raw_config.decode("utf-8")
+
+        model_config = json.loads(raw_config)
+        model_config = _replace_batch_shape(model_config)
+        model = tf.keras.models.model_from_json(json.dumps(model_config))
+        model.load_weights(model_path)
+        return model
+
+
+model = load_model_compat("model.h5")
 
 with open ('scaler.pkl', 'rb') as f:
     scaler = pickle.load(f) 
